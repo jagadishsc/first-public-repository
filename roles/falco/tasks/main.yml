@@ -1,0 +1,212 @@
+- name: Create Falco Service Account
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: falco-account
+        labels:
+          app: falco
+          role: security
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Falco Cluster Role
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      kind: ClusterRole
+      apiVersion: rbac.authorization.k8s.io/v1
+      metadata:
+        name: falco-cluster-role
+        labels:
+          app: falco
+          role: security
+      rules:
+        - apiGroups:
+          - "extensions"
+          - ""
+          resources:
+          - "nodes"
+          - "namespaces"
+          - "pods"
+          - "replicationcontrollers"
+          - "replicasets"
+          - "services"
+          - "daemonsets"
+          - "deployments"
+          - "events"
+          - "configmaps"
+          verbs:
+          - "get"
+          - "list"
+          - "watch"
+        - nonResourceURLs:
+          - "/healthz"
+          - "/healthz/*"
+          verbs:
+          - "get"
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Falco Cluster Role Binding
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      kind: ClusterRoleBinding
+      apiVersion: rbac.authorization.k8s.io/v1
+      metadata:
+        name: falco-cluster-role-binding
+        namespace: pluto
+        labels:
+          app: falco
+          role: security
+      subjects:
+        - kind: ServiceAccount
+          name: falco-account
+          namespace: pluto
+      roleRef:
+        kind: ClusterRole
+        name: falco-cluster-role
+        apiGroup: rbac.authorization.k8s.io
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Falco Service
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: falco-service
+        labels:
+          app: falco
+          role: security
+      spec:
+        selector:
+          app: falco
+        ports:
+        - protocol: TCP
+          port: 8765
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Falco ConfigMap
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: falco-config
+      data:
+        falco.yaml: "{{ lookup('template', 'templates/falco.yaml.j2') }}"
+        falco_rules.yaml: "{{ lookup('template', 'templates/falco_rules.yaml.j2') }}"
+        falco_rules.local.yaml: "{{ lookup('template', 'templates/falco_rules.local.yaml.j2') }}"
+        k8s_audit_rules.yaml: "{{ lookup('template', 'templates/k8s_audit_rules.yaml.j2') }}"
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Falco DaemonSet
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: falco-daemonset
+        labels:
+          app: falco
+          role: security
+      spec:
+        selector:
+          matchLabels:
+            app: falco
+            role: security
+        template:
+          metadata:
+            labels:
+              app: falco
+              role: security
+          spec:
+            serviceAccount: falco-account
+            containers:
+            - name: falco
+              image: falcosecurity/falco:0.17.1
+              securityContext:
+                privileged: true
+              env:
+              - name: SYSDIG_BPF_PROBE
+                value: "/root/.sysdig/falco-probe-bpf.o"
+              args:
+              - "/usr/bin/falco"
+              - "--cri"
+              - "/host/run/containerd/containerd.sock"
+              - "-K"
+              - "/var/run/secrets/kubernetes.io/serviceaccount/token"
+              - "-k"
+              - "https://$(KUBERNETES_SERVICE_HOST)"
+              - "-pk"
+              volumeMounts:
+              - mountPath: /host/var/run/docker.sock
+                name: docker-socket
+              - mountPath: /host/run/containerd/containerd.sock
+                name: containerd-socket
+              - mountPath: /host/dev
+                name: dev-fs
+                readOnly: true
+              - mountPath: /host/proc
+                name: proc-fs
+                readOnly: true
+              - mountPath: /host/boot
+                name: boot-fs
+                readOnly: true
+              - mountPath: /host/lib/modules
+                name: lib-modules
+                readOnly: true
+              - mountPath: /host/usr
+                name: usr-fs
+                readOnly: true
+              - mountPath: /host/etc/
+                name: etc-fs
+                readOnly: true
+              - mountPath: /etc/falco
+                name: falco-config
+            volumes:
+            - name: docker-socket
+              hostPath:
+                path: /var/run/docker.sock
+            - name: containerd-socket
+              hostPath:
+                path: /run/containerd/containerd.sock
+            - name: dev-fs
+              hostPath:
+                path: /dev
+            - name: proc-fs
+              hostPath:
+                path: /proc
+            - name: boot-fs
+              hostPath:
+                path: /boot
+            - name: lib-modules
+              hostPath:
+                path: /lib/modules
+            - name: usr-fs
+              hostPath:
+                path: /usr
+            - name: etc-fs
+              hostPath:
+                path: /etc
+            - name: falco-config
+              configMap:
+                name: falco-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"

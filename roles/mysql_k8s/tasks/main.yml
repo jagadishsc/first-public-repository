@@ -1,0 +1,112 @@
+- name: Create list of MySQL authorized hosts
+  set_fact:
+    mysql_authorized_networks: "{{ mysql_authorized_networks | default([]) + [{'value': item.networkInterfaces[0].accessConfigs[0].natIP + '/32' }] }}"
+  with_items: "{{ all_gke_instances['resources'] }}"
+  when: item.networkInterfaces[0].network == network.selfLink
+  no_log: true
+
+- name: Create MySQL Cloud instance {{ mysql_authorized_networks }} {{ platform_name }} {{ sql_tag }}
+  gcp_sql_instance:
+    name: "{{ platform_name }}-db-{{ sql_tag }}"
+    backend_type: "SECOND_GEN"
+    database_version: "MYSQL_5_7"
+    instance_type: "CLOUD_SQL_INSTANCE"
+    settings:
+      backup_configuration:
+        enabled: yes
+        # Default backup time which is in UTC
+        start_time: "07:00"
+      ip_configuration:
+        authorized_networks: "{{ mysql_authorized_networks }}"
+        require_ssl: yes
+      tier: db-n1-standard-1
+    region: "{{ region }}"
+    project: "{{ gcp_project_id }}"
+    auth_kind: "serviceaccount"
+    service_account_file: "{{ sa_path }}"
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+    state: present
+  register: db_instance
+
+- name: Print db_instance
+  ansible.builtin.debug:
+    var: db_instance
+
+- name: Create MySQL user
+  gcp_sql_user:
+    name: "pluto"
+    host: "%"
+    instance: "{{ db_instance }}"
+    password: "{{ sql_password }}"
+    project: "{{ gcp_project_id }}"
+    auth_kind: "serviceaccount"
+    service_account_file: "{{ sa_path }}"
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+    state: present
+  no_log: true
+
+- name: Create MySQL database
+  gcp_sql_database:
+    name: "pluto"
+    charset: "utf8"
+    instance: "{{ db_instance.name }}"
+    project: "{{ gcp_project_id }}"
+    auth_kind: "serviceaccount"
+    service_account_file: "{{ sa_path }}"
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+    state: present
+  register: mysql_db
+
+- name: Create Cert Facts
+  set_fact:
+    sql_cert_name: "{{ platform_name }}-cert"
+    client_key_file: "{{ platform_name }}-client-key.pem"
+    client_key_path: "{{ playbook_dir }}/{{ platform_name }}-client-key.pem"
+    client_cert_file: "{{ platform_name }}-client-cert.pem"
+    client_cert_path: "{{ playbook_dir }}/{{ platform_name }}-client-cert.pem"
+
+# Have to use 'gcloud' to create client key and cert if doesn't exist
+- name: "Check if Client Key exists"
+  stat:
+    path: "{{ client_key_path }}"
+  register: client_key_exists
+
+- name: "Create Client Key If It Doesn't Exist"
+  command: "sudo gcloud sql ssl client-certs create {{ sql_cert_name }} {{ client_key_file }} --instance={{ db_instance.name }}"
+  when: client_key_exists.stat.exists == False
+
+- name: "Check if Client Cert exists"
+  stat:
+    path: "{{ client_cert_path }}"
+  register: client_cert_exists
+
+- name: "Create Client Cert If It Doesn't Exist {{sql_cert_name}} {{db_instance.name}}"
+  command: "sudo gcloud sql ssl client-certs describe {{ sql_cert_name }} --instance={{ db_instance.name }} --format=\"value(cert)\""
+  when: client_cert_exists.stat.exists == False
+  register: client_cert_out
+
+- name: "Save Client Cert If Created"
+  copy:
+    content: "{{ client_cert_out.stdout }}"
+    dest: "{{ client_cert_file }}"
+  when: client_cert_exists.stat.exists == False and client_cert_out.stdout
+
+- name: Import MySQL secrets
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: mysql-secrets
+      type: Opaque
+      data:
+        host: "{{ db_instance.ipAddresses[0].ipAddress | b64encode }}"
+        password: "{{ sql_password | b64encode }}"
+        server-ca.pem: "{{ db_instance.serverCaCert.cert | b64encode }}"
+        client-cert.pem: "{{ lookup('file', '{{ client_cert_path }}') | b64encode }}"
+        client-key.pem: "{{ lookup('file', '{{ client_key_path }}') | b64encode }}"

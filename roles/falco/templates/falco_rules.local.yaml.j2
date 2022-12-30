@@ -1,0 +1,62 @@
+#
+# Copyright (C) 2019 The Falco Authors.
+#
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+- macro: backend_dir
+  condition: (fd.directory=/opt/pluto/code/django or fd.name startswith /opt/pluto/code/django)
+
+- macro: python_cache
+  condition: ((proc.name=python or proc.name=gunicorn) and fd.name startswith /opt/pluto/code/django and (fd.name contains __pycache__ or fd.name startswith /opt/pluto/code/django/.cache))
+
+- macro: gpy_temp_files
+  condition: ((proc.name=python or proc.name=gunicorn) and fd.name startswith /opt/pluto/code/django/.pyxbld)
+
+- list: backend_images
+  items: [
+    gcr.io/pluto-dev-174820/backend, gcr.io/pluto-dev-174820/backend-dev
+    ]
+
+- macro: frontend_dir
+  condition: (fd.directory=/opt/pluto/code/react or fd.name startswith /opt/pluto/code/react)
+
+- list: frontend_images
+  items: [
+    gcr.io/pluto-dev-174820/frontend, gcr.io/pluto-dev-174820/frontend-dev
+    ]
+
+- macro: python_running_keras
+  condition: (proc.name=python and fd.name startswith /opt/pluto/code/django/.keras)
+
+- rule: Write in backend directory
+  desc: an attempt to write to any file in the backend directory
+  condition: >
+    backend_dir and evt.dir = < and open_write
+    and container.image.repository in (backend_images)
+    and not python_cache
+    and not gpy_temp_files
+    and not python_running_keras
+  output: "File in backend directory opened for writing (user=%user.name command=%proc.cmdline parent=%proc.pname file=%fd.name program=%proc.name container_id=%container.id image=%container.image.repository)"
+  priority: ERROR
+  tags: [filesystem, mitre_persistence]
+
+- rule: Write in frontend directory
+  desc: an attempt to write to any file in the frontend directory
+  condition: >
+    frontend_dir and evt.dir = < and open_write
+    and container.image.repository in (frontend_images)
+  output: "File in frontend directory opened for writing (user=%user.name command=%proc.cmdline parent=%proc.pname file=%fd.name program=%proc.name container_id=%container.id image=%container.image.repository)"
+  priority: ERROR
+  tags: [filesystem, mitre_persistence]

@@ -1,0 +1,6 @@
+---
+- name: "Destroy Infrastructure"
+  hosts: localhost
+  roles:
+    - destroy_multi_infra
+

@@ -1,0 +1,12 @@
+{
+  "type": "service_account",
+  "project_id": "pluto-dev-174820",
+  "private_key_id": "555542da2c734445afaed8068109b8cec9fe626c",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDFfZ/ZanSXAdeZ\nsGAaQe3B/And6/+sNvF3OYrOPTcULR4LlG8A4l9tk60YCOdbfRmOwbDy4QxjLNge\nVQdPqaulcSNJvakGVshMbXugEcxB8rWHyoSjzh2dG8jbTcv+PQCT78MoMo3bHmyf\nbtRVTwls3j/FIEMN1q82Y61DWJ8fwWgC3lNjW5sjNOgda7oQh5U8iELPyqVr+TIR\n5ptbJEFlGLzhhnkap0a6bxKbVfQmNCbbKUFqWIatHMkjtJvIqS1PAby8236Yejy4\n2yyd1JMxFxMjVVLhAm+UhK+VXAJsmqeR14u4m5NXUi2k7zZn+in8Npd8kcpchFiX\nyB2s3EMTAgMBAAECggEALVj1wf4kTGJjZ8psnsrhtcfSWi9tE1XAZ2CCo23B/nOH\nsSABxyGzyNz+g4TT3xmgKzwFjhen+QPckkZy+dNbcw9CC5YtwCNgNdBz8SL1FHWP\nQmF5yIU1HpS5L8Yy36uRPObymIHXOefICGnx/q652tJDsVeBniVcMTB9Ifgw/aDL\nkl7lT5wbSKYIw9YWNg4yysfHjqmNsxEmJc2+DTLLfdwXUdMyIxA1LVtqOHWM3nir\n3rFGk5DNoPKeGB5YuvqQw0fZaZ3yb7q+GKUl6ZQiN2hUnEej9qMUDoFF81u5HrXR\nBcl0qP32gulO+is7yM0rz4Xklw7GBpMkUaYH1lH+1QKBgQDp6CNSjEGSkdZk+RO3\n0xFDD3Dbf36FluZjyBmkAEqCv3JmcWqdFSE3MbWMTPg46EHbKJiCmG6eaPlRprZA\nP8U3KVelwHl4p9hzTL1mUPVKpyEUJkRIKPMStEkvHJ//PQ407Y//AsoLWf1MTMKw\nEIikqvYFQBCfFg52v4HGmRPjbQKBgQDYJPJQSNwuTcsf7HRZcH+r544Wk8oMCYXi\n1KbWSQQ2CnFER4b5WpFPT0iDzI3VtjWwqf9gTCClw2g3+s3pMZ2Y3/Le8zUeuRPN\nS11c/FjCNKNckVyJFdySORqv5dx88qXgVMaegVxluMK3yzhfyuTS69nLGUI7pJ3/\nXRZeFIIwfwKBgBZ9IDBGleNerCtHG1M4Mtesu2APMP3tFTeQvI5dDMznVTtuOh7i\nMjBZUigsGk12XyaQD6G2wCPw2c+05J7mwrJcAjZIfCVSlef3/9m/fOXxjaefSj9Z\n2Iz60nJ6IRPsLdp+4LJW9VAEFetpEerVnB2g5kh48WAqQbe/D94lR5k9AoGAIFtv\nlwtBQwFMXkwUousPgdmZUNHxFlo6m9l/3GZz5e8sQ699iki/piLVVT3DIfI0GW1p\nmK3s2UPmjzLRro5J7H/iKPQ5yI6mYz5cDLaORwyARDRSqQcHzTAVSa3ckyv0HyAx\n17q/7U56f+9BUj3agaTjJt9yJeGf8YGq/oyNbNsCgYBBK/4zvJrCIOwLNJJH+tQD\ngXG4sjqmXnHsRaJ4xgXMHnp9pOFAF5/bGYo3xO0D9kFCZTcLRv5njvWNLL30O/US\nW6v0S867se2gYGnQ0tdThS3GmstbUb2/lCShWv409eOGvAKHiAHM7hrlJ+vgILF1\nByQw715CZIcMfYlq6sgtAg==\n-----END PRIVATE KEY-----\n",
+  "client_email": "abednarek@pluto-dev-174820.iam.gserviceaccount.com",
+  "client_id": "115551212650575924205",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/abednarek%40pluto-dev-174820.iam.gserviceaccount.com"
+}

@@ -1,0 +1,802 @@
+- name: Create Backend Service
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        labels:
+          app: backend
+        name: backend
+      spec:
+        clusterIP: None
+        ports:
+        - port: 8000
+        selector:
+          app: backend
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Import Backend settings
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: backend-settings
+      type: Opaque
+      data:
+        FRONTEND: "{{ frontend | b64encode }}"
+        BACKEND_SECRET_KEY: "{{ backend_secret_key | b64encode }}"
+        BACKEND_GA_ID: "{{ ga_id | b64encode }}"
+
+- name: Create Backend Models NFS Service
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        labels:
+          app: backend-models-nfs
+        name: backend-models-nfs
+      spec:
+        clusterIP: None
+        ports:
+        - name: nfs
+          port: 2049
+        - name: mountd
+          port: 20048
+        - name: rpcbind
+          port: 111
+        selector:
+          app: backend-models-nfs
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Models NFS Volume Claim
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: backend-models-nfs
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast
+        resources:
+          requests:
+            storage: 100Gi
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Models NFS Deployment
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: backend-models-nfs
+      spec:
+        selector:
+          matchLabels:
+            app: backend-models-nfs
+        replicas: 1
+        template:
+          metadata:
+            labels:
+              app: backend-models-nfs
+          spec:
+            containers:
+            - name: backend-models-nfs
+              image: gcr.io/google_containers/volume-nfs:0.8
+              ports:
+              - name: nfs
+                containerPort: 2049
+              - name: mountd
+                containerPort: 20048
+              - name: rpcbind
+                containerPort: 111
+              securityContext:
+                privileged: true
+              volumeMounts:
+              - name: backend-models-nfs
+                mountPath: /exports
+            imagePullSecrets:
+            - name: gcr-docker-config
+            volumes:
+            - name: backend-models-nfs
+              persistentVolumeClaim:
+                claimName: backend-models-nfs
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Deployment
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: backend
+      spec:
+        selector:
+          matchLabels:
+            app: backend
+        replicas: 3
+        template:
+          metadata:
+            labels:
+              app: backend
+          spec:
+            containers:
+            - name: backend
+              image: "{{ images.backend.image_url }}:{{ images.backend.tag }}"
+              # image: "{{ images.backend.image_url | default('gcr.io/pluto-dev-174820/backend') }}:{{ images.backend.tag | default('latest') }}"
+              env:
+              - name: HOME
+                value: "/opt/pluto/code/django"
+              - name: FRONTEND
+                valueFrom:
+                  secretKeyRef:
+                    name: backend-settings
+                    key: FRONTEND
+              - name: BACKEND_SECRET_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: backend-settings
+                    key: BACKEND_SECRET_KEY
+              - name: BACKEND_GA_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: backend-settings
+                    key: BACKEND_GA_ID
+              - name: BACKEND_DB_HOST
+                valueFrom:
+                  secretKeyRef:
+                    name: mysql-secrets
+                    key: host
+              - name: BACKEND_DB_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: mysql-secrets
+                    key: password
+              - name: POLLER_HOST
+                value: "{{ poller_host }}"
+              - name: POLLER_PASSWORD
+                value: "{{ poller_password }}"
+              - name: POLLER_USER
+                value: "{{ poller_user }}"
+              - name: POLLER_PORT
+                value: "{{ poller_port }}"
+              ports:
+              - containerPort: 8000
+                name: backend
+              # imagePullPolicy: Always
+              volumeMounts:
+              - name: backend-models
+                mountPath: /opt/pluto/data/django/models
+              - name: sql-certs
+                readOnly: true
+                mountPath: /opt/pluto/data/django/certs
+            volumes:
+            - name: backend-models
+              nfs:
+                server: "backend-models-nfs.pluto.svc.cluster.local"
+                path: "/"
+            - name: sql-certs
+              secret:
+                secretName: mysql-secrets
+                items:
+                - key: server-ca.pem
+                  path: server-ca.pem
+                - key: client-cert.pem
+                  path: client-cert.pem
+                - key: client-key.pem
+                  path: client-key.pem
+            imagePullSecrets:
+            - name: gcr-docker-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Process Tasks Deployment
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: backend-process-tasks
+      spec:
+        selector:
+          matchLabels:
+            app: backend-process-tasks
+        replicas: 1
+        template:
+          metadata:
+            labels:
+              app: backend-process-tasks
+          spec:
+            containers:
+            - name: backend-process-tasks
+              image: "{{ images.backend.image_url | default('gcr.io/pluto-dev-174820/backend') }}:{{ images.backend.tag | default('latest') }}"
+              command:
+              - "/bin/bash"
+              args:
+              - "-c"
+              - "cd /opt/pluto/code/django/ && python manage.py process_tasks"
+              env:
+              - name: HOME
+                value: "/opt/pluto/code/django"
+              - name: FRONTEND
+                valueFrom:
+                  secretKeyRef:
+                    name: backend-settings
+                    key: FRONTEND
+              - name: BACKEND_SECRET_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: backend-settings
+                    key: BACKEND_SECRET_KEY
+              - name: BACKEND_GA_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: backend-settings
+                    key: BACKEND_GA_ID
+              - name: BACKEND_DB_HOST
+                valueFrom:
+                  secretKeyRef:
+                    name: mysql-secrets
+                    key: host
+              - name: BACKEND_DB_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: mysql-secrets
+                    key: password
+              volumeMounts:
+              - name: backend-models
+                mountPath: /opt/pluto/data/django/models
+              - name: sql-certs
+                readOnly: true
+                mountPath: /opt/pluto/data/django/certs
+            volumes:
+            - name: backend-models
+              nfs:
+                server: "backend-models-nfs.pluto.svc.cluster.local"
+                path: "/"
+            - name: sql-certs
+              secret:
+                secretName: mysql-secrets
+                items:
+                - key: server-ca.pem
+                  path: server-ca.pem
+                - key: client-cert.pem
+                  path: client-cert.pem
+                - key: client-key.pem
+                  path: client-key.pem
+            imagePullSecrets:
+            - name: gcr-docker-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Polling Cron Job {{ poller_cron }}
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: batch/v1beta1
+      kind: CronJob
+      metadata:
+        name: backend-polling
+      spec:
+        schedule: "{{ poller_cron }}"
+        startingDeadlineSeconds: 600
+        selector:
+          matchLabels:
+            app: backend-polling
+        jobTemplate:
+          spec:
+            template:
+              metadata:
+                labels:
+                  app: backend-polling
+              spec:
+                containers:
+                - name: backend-polling
+                  image: "{{ images.backend.image_url | default('gcr.io/pluto-dev-174820/backend') }}:{{ images.backend.tag | default('latest') }}"
+                  args:
+                  - "/bin/bash"
+                  - "-c"
+                  - "cd /opt/pluto/code/django/ && python manage.py run_polling {{ subdomain }}"
+                  env:
+                  - name: HOME
+                    value: "/opt/pluto/code/django"
+                  - name: FRONTEND
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: FRONTEND
+                  - name: BACKEND_SECRET_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_SECRET_KEY
+                  - name: BACKEND_GA_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_GA_ID
+                  - name: BACKEND_DB_HOST
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: host
+                  - name: BACKEND_DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: password
+                  - name: POLLER_HOST
+                    value: "{{ poller_host }}"
+                  - name: POLLER_PASSWORD
+                    value: "{{ poller_password }}"
+                  - name: POLLER_USER
+                    value: "{{ poller_user }}"
+                  - name: POLLER_PORT
+                    value: "{{ poller_port }}"
+                  volumeMounts:
+                  - name: backend-models
+                    mountPath: /opt/pluto/data/django/models
+                  - name: sql-certs
+                    readOnly: true
+                    mountPath: /opt/pluto/data/django/certs
+                volumes:
+                - name: backend-models
+                  nfs:
+                    server: "backend-models-nfs.pluto.svc.cluster.local"
+                    path: "/"
+                - name: sql-certs
+                  secret:
+                    secretName: mysql-secrets
+                    items:
+                    - key: server-ca.pem
+                      path: server-ca.pem
+                    - key: client-cert.pem
+                      path: client-cert.pem
+                    - key: client-key.pem
+                      path: client-key.pem
+                restartPolicy: OnFailure
+                imagePullSecrets:
+                - name: gcr-docker-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Alerts Cron Job
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: batch/v1beta1
+      kind: CronJob
+      metadata:
+        name: backend-alerts
+      spec:
+        schedule: "0 22 * * *"
+        selector:
+          matchLabels:
+            app: backend-alerts
+        jobTemplate:
+          spec:
+            template:
+              metadata:
+                labels:
+                  app: backend-alerts
+              spec:
+                containers:
+                - name: backend-alerts
+                  image: "{{ images.backend.image_url | default('gcr.io/pluto-dev-174820/backend') }}:{{ images.backend.tag | default('latest') }}"
+                  args:
+                  - "/bin/bash"
+                  - "-c"
+                  - "cd /opt/pluto/code/django/ && python manage.py run_aggregate_alerts_check"
+                  env:
+                  - name: HOME
+                    value: "/opt/pluto/code/django"
+                  - name: FRONTEND
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: FRONTEND
+                  - name: BACKEND_SECRET_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_SECRET_KEY
+                  - name: BACKEND_GA_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_GA_ID
+                  - name: BACKEND_DB_HOST
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: host
+                  - name: BACKEND_DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: password
+                  volumeMounts:
+                  - name: backend-models
+                    mountPath: /opt/pluto/data/django/models
+                  - name: sql-certs
+                    readOnly: true
+                    mountPath: /opt/pluto/data/django/certs
+                volumes:
+                - name: backend-models
+                  nfs:
+                    server: "backend-models-nfs.pluto.svc.cluster.local"
+                    path: "/"
+                - name: sql-certs
+                  secret:
+                    secretName: mysql-secrets
+                    items:
+                    - key: server-ca.pem
+                      path: server-ca.pem
+                    - key: client-cert.pem
+                      path: client-cert.pem
+                    - key: client-key.pem
+                      path: client-key.pem
+                restartPolicy: OnFailure
+                imagePullSecrets:
+                - name: gcr-docker-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Online Training for Asset Models Cron Job {{ training_cron }}
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: batch/v1beta1
+      kind: CronJob
+      metadata:
+        name: backend-online-training-asset
+      spec:
+        schedule: "{{ training_cron }}"
+        startingDeadlineSeconds: 3600
+        selector:
+          matchLabels:
+            app: backend-online-training-asset
+        jobTemplate:
+          spec:
+            template:
+              metadata:
+                labels:
+                  app: backend-online-training-asset
+              spec:
+                containers:
+                - name: backend-online-training-asset
+                  image: "{{ images.backend.image_url | default('gcr.io/pluto-dev-174820/backend') }}:{{ images.backend.tag | default('latest') }}"
+                  args:
+                  - "/bin/bash"
+                  - "-c"
+                  - "cd /opt/pluto/code/django/ && python manage.py train_asset_models"
+                  env:
+                  - name: HOME
+                    value: "/opt/pluto/code/django"
+                  - name: FRONTEND
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: FRONTEND
+                  - name: BACKEND_SECRET_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_SECRET_KEY
+                  - name: BACKEND_GA_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_GA_ID
+                  - name: BACKEND_DB_HOST
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: host
+                  - name: BACKEND_DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: password
+                  volumeMounts:
+                  - name: backend-models
+                    mountPath: /opt/pluto/data/django/models
+                  - name: sql-certs
+                    readOnly: true
+                    mountPath: /opt/pluto/data/django/certs
+                volumes:
+                - name: backend-models
+                  nfs:
+                    server: "backend-models-nfs.pluto.svc.cluster.local"
+                    path: "/"
+                - name: sql-certs
+                  secret:
+                    secretName: mysql-secrets
+                    items:
+                    - key: server-ca.pem
+                      path: server-ca.pem
+                    - key: client-cert.pem
+                      path: client-cert.pem
+                    - key: client-key.pem
+                      path: client-key.pem
+                restartPolicy: OnFailure
+                imagePullSecrets:
+                - name: gcr-docker-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Online Training for Asset Chart Models Cron Job
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: batch/v1beta1
+      kind: CronJob
+      metadata:
+        name: backend-online-training-asset-chart
+      spec:
+        schedule: "0 4 * * 0"
+        startingDeadlineSeconds: 3600
+        selector:
+          matchLabels:
+            app: backend-online-training-asset-chart
+        jobTemplate:
+          spec:
+            template:
+              metadata:
+                labels:
+                  app: backend-online-training-asset-chart
+              spec:
+                containers:
+                - name: backend-online-training-asset-chart
+                  image: "{{ images.backend.image_url | default('gcr.io/pluto-dev-174820/backend') }}:{{ images.backend.tag | default('latest') }}"
+                  args:
+                  - "/bin/bash"
+                  - "-c"
+                  - "cd /opt/pluto/code/django/ && python manage.py train_asset_chart_models"
+                  env:
+                  - name: HOME
+                    value: "/opt/pluto/code/django"
+                  - name: FRONTEND
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: FRONTEND
+                  - name: BACKEND_SECRET_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_SECRET_KEY
+                  - name: BACKEND_GA_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_GA_ID
+                  - name: BACKEND_DB_HOST
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: host
+                  - name: BACKEND_DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: password
+                  volumeMounts:
+                  - name: backend-models
+                    mountPath: /opt/pluto/data/django/models
+                  - name: sql-certs
+                    readOnly: true
+                    mountPath: /opt/pluto/data/django/certs
+                volumes:
+                - name: backend-models
+                  nfs:
+                    server: "backend-models-nfs.pluto.svc.cluster.local"
+                    path: "/"
+                - name: sql-certs
+                  secret:
+                    secretName: mysql-secrets
+                    items:
+                    - key: server-ca.pem
+                      path: server-ca.pem
+                    - key: client-cert.pem
+                      path: client-cert.pem
+                    - key: client-key.pem
+                      path: client-key.pem
+                restartPolicy: OnFailure
+                imagePullSecrets:
+                - name: gcr-docker-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Online Training for Process Models Cron Job
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: batch/v1beta1
+      kind: CronJob
+      metadata:
+        name: backend-online-training-process
+      spec:
+        schedule: "0 4 * * 0"
+        startingDeadlineSeconds: 3600
+        selector:
+          matchLabels:
+            app: backend-online-training-process
+        jobTemplate:
+          spec:
+            template:
+              metadata:
+                labels:
+                  app: backend-online-training-process
+              spec:
+                containers:
+                - name: backend-online-training-process
+                  image: "{{ images.backend.image_url | default('gcr.io/pluto-dev-174820/backend') }}:{{ images.backend.tag | default('latest') }}"
+                  args:
+                  - "/bin/bash"
+                  - "-c"
+                  - "cd /opt/pluto/code/django/ && python manage.py train_process_models"
+                  env:
+                  - name: HOME
+                    value: "/opt/pluto/code/django"
+                  - name: FRONTEND
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: FRONTEND
+                  - name: BACKEND_SECRET_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_SECRET_KEY
+                  - name: BACKEND_GA_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_GA_ID
+                  - name: BACKEND_DB_HOST
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: host
+                  - name: BACKEND_DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: password
+                  volumeMounts:
+                  - name: backend-models
+                    mountPath: /opt/pluto/data/django/models
+                  - name: sql-certs
+                    readOnly: true
+                    mountPath: /opt/pluto/data/django/certs
+                volumes:
+                - name: backend-models
+                  nfs:
+                    server: "backend-models-nfs.pluto.svc.cluster.local"
+                    path: "/"
+                - name: sql-certs
+                  secret:
+                    secretName: mysql-secrets
+                    items:
+                    - key: server-ca.pem
+                      path: server-ca.pem
+                    - key: client-cert.pem
+                      path: client-cert.pem
+                    - key: client-key.pem
+                      path: client-key.pem
+                restartPolicy: OnFailure
+                imagePullSecrets:
+                - name: gcr-docker-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Backend Online Training for Process Chart Models Cron Job
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: batch/v1beta1
+      kind: CronJob
+      metadata:
+        name: backend-online-training-process-chart
+      spec:
+        schedule: "0 4 * * 0"
+        startingDeadlineSeconds: 3600
+        selector:
+          matchLabels:
+            app: backend-online-training-process-chart
+        jobTemplate:
+          spec:
+            template:
+              metadata:
+                labels:
+                  app: backend-online-training-process-chart
+              spec:
+                containers:
+                - name: backend-online-training-process-chart
+                  image: "{{ images.backend.image_url | default('gcr.io/pluto-dev-174820/backend') }}:{{ images.backend.tag | default('latest') }}"
+                  args:
+                  - "/bin/bash"
+                  - "-c"
+                  - "cd /opt/pluto/code/django/ && python manage.py train_process_chart_models"
+                  env:
+                  - name: HOME
+                    value: "/opt/pluto/code/django"
+                  - name: FRONTEND
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: FRONTEND
+                  - name: BACKEND_SECRET_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_SECRET_KEY
+                  - name: BACKEND_GA_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: backend-settings
+                        key: BACKEND_GA_ID
+                  - name: BACKEND_DB_HOST
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: host
+                  - name: BACKEND_DB_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secrets
+                        key: password
+                  volumeMounts:
+                  - name: backend-models
+                    mountPath: /opt/pluto/data/django/models
+                  - name: sql-certs
+                    readOnly: true
+                    mountPath: /opt/pluto/data/django/certs
+                volumes:
+                - name: backend-models
+                  nfs:
+                    server: "backend-models-nfs.pluto.svc.cluster.local"
+                    path: "/"
+                - name: sql-certs
+                  secret:
+                    secretName: mysql-secrets
+                    items:
+                    - key: server-ca.pem
+                      path: server-ca.pem
+                    - key: client-cert.pem
+                      path: client-cert.pem
+                    - key: client-key.pem
+                      path: client-key.pem
+                restartPolicy: OnFailure
+                imagePullSecrets:
+                - name: gcr-docker-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"

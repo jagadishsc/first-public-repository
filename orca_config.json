@@ -1,0 +1,24 @@
+{
+    "subdomain": "orca",
+    "sa_path": "service_account.json",
+    "private_key": "my_key",
+    "mode": "multi_alerts",
+    "fixtures_path": "fixtures/demo",
+    "ga_id": "UA-86788611-4",
+    "region": "us-central1",
+    "poller_cron": "0 0 * * *",
+    "images": {
+        "backend": {
+            "image_url": "gcr.io/pluto-dev-174820/backend-testing-evoqua_cd",
+            "tag": "1248"
+        },
+        "frontend": {
+            "image_url": "gcr.io/pluto-dev-174820/frontend",
+            "tag": "79"
+        }
+    },
+    "poller_host": "",
+    "poller_password": "",
+    "poller_user": "",
+    "poller_port": ""
+}

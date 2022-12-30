@@ -1,0 +1,24 @@
+---
+- name: "Create Infrastructure"
+  hosts: localhost
+  roles:
+    - create_multi_infra
+
+- name: "Deploy external dependencies into GCE Cluster"
+  hosts: localhost
+  roles:
+    - cassandra_k8s
+    - mysql_k8s
+    - nginx_k8s
+
+- name: "Deploy Pluto images into GCE Cluster"
+  hosts: localhost
+  roles:
+    - backend_k8s_alerts
+    - frontend_k8s
+
+#falco PODs are not needed as of now
+#- name: "Deploy Security Apps into GCE Cluster"
+#  hosts: localhost
+#  roles:
+#    - falco

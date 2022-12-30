@@ -1,0 +1,225 @@
+- name: Create Cassandra Service
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        labels:
+          app: cassandra
+        name: cassandra
+      spec:
+        clusterIP: None
+        ports:
+        - port: 9042
+        selector:
+          app: cassandra
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Cassandra StatefulSet
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: cassandra
+        labels:
+          app: cassandra
+      spec:
+        serviceName: cassandra
+        replicas: 3
+        selector:
+          matchLabels:
+            app: cassandra
+        template:
+          metadata:
+            labels:
+              app: cassandra
+          spec:
+            terminationGracePeriodSeconds: 1800
+            containers:
+            - name: cassandra
+              image: gcr.io/google-samples/cassandra:v14
+              imagePullPolicy: IfNotPresent
+              ports:
+              - containerPort: 7000
+                name: intra-node
+              - containerPort: 7001
+                name: tls-intra-node
+              - containerPort: 7199
+                name: jmx
+              - containerPort: 9042
+                name: cql
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: 1Gi
+              securityContext:
+                capabilities:
+                  add:
+                    - IPC_LOCK
+              lifecycle:
+                preStop:
+                  exec:
+                    command:
+                    - /bin/sh
+                    - -c
+                    - nodetool drain
+              env:
+                - name: MAX_HEAP_SIZE
+                  value: 512M
+                - name: HEAP_NEWSIZE
+                  value: 100M
+                - name: CASSANDRA_SEEDS
+                  value: "cassandra-0.cassandra.pluto.svc.cluster.local"
+                - name: CASSANDRA_CLUSTER_NAME
+                  value: "Pluto Cluster"
+                - name: CASSANDRA_DC
+                  value: "Pluto-DC1"
+                - name: CASSANDRA_RACK
+                  value: "Pluto-Rack1"
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+              readinessProbe:
+                exec:
+                  command:
+                  - /bin/bash
+                  - -c
+                  - /ready-probe.sh
+                initialDelaySeconds: 15
+                timeoutSeconds: 5
+              volumeMounts:
+              - name: cassandra-data
+                mountPath: /cassandra_data
+        volumeClaimTemplates:
+        - metadata:
+            name: cassandra-data
+          spec:
+            accessModes:
+              - "ReadWriteOnce"
+            storageClassName: fast
+            resources:
+              requests:
+                storage: 100Gi
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Wait for Cassandra StatefulSet to be ready
+  k8s:
+    name: cassandra
+    namespace: pluto
+    api_version: apps/v1
+    kind: StatefulSet
+  register: cassandra_status
+  until: cassandra_status is succeeded and cassandra_status.result.status.readyReplicas | default(0) == 3
+  retries: 60
+  delay: 10
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Start proxy connection to Cassandra
+  command: sudo kubectl port-forward svc/cassandra 29042:9042 --namespace pluto
+  async: 120
+  poll: 0
+
+- name: 'Print out ansible facts - role_path'
+  debug:
+    var: ansible_facts.role_path
+
+- name: 'Print PATH variable value'
+  debug: 
+    msg: "{{ ansible_env.PATH }}"
+
+- name: 'Install cqlsh from snap package manager'
+  command: sudo snap install cqlsh
+
+#This requires cqlsh (cassandra query language shell)
+- name: Check Cassandra connection
+  cassandra_connection:
+    port: 29042
+    retries: 10
+
+#This requires cqlsh (cassandra query language shell)
+- name: "Create Cassandra keyspace"
+  cassandra_keyspace:
+    name: pluto
+    replication_factor: 2
+    port: 29042
+
+- name: "Create historical_floats table"
+  cassandra_table:
+    name: historical_floats
+    keyspace: pluto
+    columns:
+      - name: datastream
+        type: text
+      - name: time
+        type: timestamp
+      - name: value
+        type: float
+    primary_keys:
+      - datastream
+      - time
+    order_by:
+      - time
+    port: 29042
+
+- name: "Create calculated_floats table"
+  cassandra_table:
+    name: calculated_floats
+    keyspace: pluto
+    columns:
+      - name: datastream
+        type: text
+      - name: time
+        type: timestamp
+      - name: value
+        type: float
+    primary_keys:
+      - datastream
+      - time
+    order_by:
+      - time
+    port: 29042
+
+- name: "Create calculated_forecasts table"
+  cassandra_table:
+    name: calculated_forecasts
+    keyspace: pluto
+    columns:
+      - name: datastream
+        type: text
+      - name: time
+        type: timestamp
+      - name: value
+        type: list<float>
+    primary_keys:
+      - datastream
+      - time
+    order_by:
+      - time
+    port: 29042
+
+- name: "Create events table"
+  cassandra_table:
+    name: events
+    keyspace: pluto
+    columns:
+      - name: uuid
+        type: UUID
+      - name: time
+        type: timestamp
+      - name: value
+        type: float
+    primary_keys:
+      - uuid
+      - time
+    order_by:
+      - time
+    port: 29042

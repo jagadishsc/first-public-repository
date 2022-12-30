@@ -1,0 +1,54 @@
+- name: Create Frontend Service
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: frontend
+        labels:
+          app: frontend
+      spec:
+        clusterIP: None
+        ports:
+        - port: 8080
+        selector:
+          app: frontend
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create Frontend Deployment
+  k8s:
+    state: present
+    namespace: pluto
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: frontend
+      spec:
+        selector:
+          matchLabels:
+            app: frontend
+        replicas: 3
+        template:
+          metadata:
+            labels:
+              app: frontend
+          spec:
+            containers:
+            - name: frontend
+              image: "{{ images.frontend.image_url }}:{{ images.frontend.tag }}"
+              # image: "{{ images.frontend.image_url | default('gcr.io/pluto-dev-174820/frontend') }}:{{ images.frontend.tag | default('latest') }}"
+              env:
+              - name: PROXY_ADDRESS
+                value: backend
+              ports:
+              - containerPort: 8080
+                name: frontend
+              # imagePullPolicy: Always
+            imagePullSecrets:
+            - name: gcr-docker-config
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"

@@ -1,0 +1,134 @@
+- name: get info on an instance
+  gcp_compute_instance_info:
+    zone: us-central1-a
+    filters:
+    - name = "test-proxy-200"
+    project: "{{ gcp_project_id }}"
+    auth_kind: "serviceaccount"
+    service_account_file: "{{ sa_path }}"
+
+- name: Create VPC
+  gcp_compute_network:
+    name: "{{ platform_name }}-vpc"
+    auto_create_subnetworks: false
+    auth_kind: "serviceaccount"
+    service_account_file: "{{ sa_path }}"
+    project: "{{ gcp_project_id }}"
+  register: network
+
+- name: Create Subnet
+  gcp_compute_subnetwork:
+    network: "{{ network }}"
+    name: "{{ platform_name }}-subnet"
+    region: "{{ region }}"
+    ip_cidr_range: "10.0.0.0/24"
+    auth_kind: "serviceaccount"
+    service_account_file: "{{ sa_path }}"
+    project: "{{ gcp_project_id }}"
+  register: subnet
+
+- name: Create k8s cluster
+  gcp_container_cluster:
+    name: "{{ platform_name }}-cluster"
+    initial_node_count: 1
+    zone: "{{ region }}-a"
+    project: "{{ gcp_project_id }}"
+    auth_kind: "serviceaccount"
+    service_account_file: "{{ sa_path }}"
+    network: "{{ platform_name }}-vpc"
+    subnetwork: "{{ platform_name }}-subnet"
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+    state: present
+  register: k8s_cluster
+
+- name: Delete default k8s node pool
+  gcp_container_node_pool:
+    name: "default-pool"
+    cluster: "{{ k8s_cluster }}"
+    initial_node_count: 1
+    project: "{{ gcp_project_id }}"
+    zone: "{{ region }}-a"
+    auth_kind: serviceaccount
+    service_account_file: "{{ sa_path }}"
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+    state: absent
+
+- name: Create k8s node pool
+  gcp_container_node_pool:
+    name: "{{ platform_name }}-node-pool"
+    initial_node_count: 3
+    autoscaling:
+      enabled: yes
+      min_node_count: 3
+      max_node_count: 15
+    config:
+      machine_type: n1-standard-4
+    cluster: "{{ k8s_cluster }}"
+    zone: "{{ region }}-a"
+    project: "{{ gcp_project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ sa_path }}"
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+    state: present
+
+- name: Get all k8s instances
+  gcp_compute_instance_info:
+    filters:
+      - "name = gke*"
+    zone: "{{ region }}-a"
+    project: "{{ gcp_project_id }}"
+    auth_kind: "serviceaccount"
+    service_account_file: "{{ sa_path }}"
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+  register: all_gke_instances
+
+# Want to update this eventually to not require 'gcloud' command
+- name: "Gather k8s credentials using 'gcloud'"
+  command: "gcloud container clusters get-credentials {{ platform_name }}-cluster --zone {{ region }}-a --project {{ gcp_project_id }}"
+
+- name: Create default k8s Namespace
+  k8s:
+    name: pluto
+    api_version: v1
+    kind: Namespace
+    state: present
+  retries: 15
+  delay: 5
+  register: namespace_create
+  until: namespace_create is succeeded
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create k8s ssd StorageClass
+  k8s:
+    state: present
+    definition:
+      kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata:
+        name: fast
+      provisioner: kubernetes.io/gce-pd
+      parameters:
+        type: pd-ssd
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
+- name: Create k8s docker secret for image pulling
+  k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: gcr-docker-config
+        namespace: pluto
+      data:
+        .dockerconfigjson: "{{ gcr_secret | b64encode }}"
+      type: kubernetes.io/dockerconfigjson
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ sa_path }}"
+
